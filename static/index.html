@@ -1,0 +1,964 @@
+<!--
+  DOMINION OmniTranslate | Architecture Note
+  --------------------------------------------------------------------------
+  DESIGN CHOICE:
+  Monolithic Single-File React via CDN & In-Browser Babel
+
+  WHY THIS APPROACH WAS CHOSEN:
+  1. Zero-Node Deployment: Eliminates the requirement for a Node.js/npm build 
+     environment on the production server (Render), keeping the container lightweight.
+  2. Single Process Serving: FastAPI serves both the JSON API (/api/v1/*) and the 
+     entire client UI directly from this static file directory.
+  3. Portfolio & Micro-SaaS Efficiency: Delivers a rich React interface with 
+     Tailwind CSS and Web Speech API without the build pipeline overhead.
+  --------------------------------------------------------------------------
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DOMINION OmniTranslate | CodeAlpha Edition</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.462.0/dist/umd/lucide.js"></script>
+</head>
+<body class="bg-[#090D16] text-white antialiased selection:bg-purple-500 selection:text-white">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, createContext, useContext, cloneElement } = React;
+
+    // UI COMPONENTS & ICON SHIMS
+    const cn = (...classes) => classes.filter(Boolean).join(" ");
+    const toast = { error: (msg) => alert("Error: " + msg), success: (msg) => alert("Success: " + msg) };
+
+    const renderIconNode = ([tag, attrs = {}, children = []]) => {
+      const attrStr = Object.entries(attrs)
+        .map(([key, val]) => `${key}="${val}"`)
+        .join(" ");
+      const childStr = children.map(renderIconNode).join("");
+      return `<${tag} ${attrStr}>${childStr}</${tag}>`;
+    };
+
+    const Icon = ({ name, className }) => {
+      const iconNode = window.lucide[name];
+      if (!iconNode) return null;
+      const [tag, attrs, children] = iconNode;
+      const svg = renderIconNode([tag, { ...attrs, class: className }, children]);
+      return (
+        <span
+          className="inline-flex items-center justify-center"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      );
+    };
+
+    const Languages     = (p) => <Icon name="Languages" {...p} />;
+    const Copy          = (p) => <Icon name="Copy" {...p} />;
+    const Check         = (p) => <Icon name="Check" {...p} />;
+    const Volume2       = (p) => <Icon name="Volume2" {...p} />;
+    const Loader2       = (p) => <Icon name="Loader2" {...p} />;
+    const Sparkles      = (p) => <Icon name="Sparkles" {...p} />;
+    const Trash2        = (p) => <Icon name="Trash2" {...p} />;
+    const Activity      = (p) => <Icon name="Activity" {...p} />;
+    const ShieldCheck   = (p) => <Icon name="ShieldCheck" {...p} />;
+    const Zap           = (p) => <Icon name="Zap" {...p} />;
+    const Globe         = (p) => <Icon name="Globe" {...p} />;
+    const Mic           = (p) => <Icon name="Mic" {...p} />;
+    const MicOff        = (p) => <Icon name="MicOff" {...p} />;
+    const Search        = (p) => <Icon name="Search" {...p} />;
+    const ChevronsUpDown = (p) => <Icon name="ChevronsUpDown" {...p} />;
+    const CheckIcon     = (p) => <Icon name="Check" {...p} />;
+    const HelpCircle    = (p) => <Icon name="HelpCircle" {...p} />;
+    const Globe2        = (p) => <Icon name="Globe2" {...p} />;
+    const AudioWaveform = (p) => <Icon name="AudioWaveform" {...p} />;
+    const Shield        = (p) => <Icon name="Shield" {...p} />;
+    const Mic2          = (p) => <Icon name="Mic2" {...p} />;
+    const ArrowRight    = (p) => <Icon name="ArrowRight" {...p} />;
+    const AlertTriangle = (p) => <Icon name="TriangleAlert" {...p} />;
+
+    const Button = React.forwardRef(({ className, variant = "default", size = "default", ...props }, ref) => {
+      const variants = {
+        default: "bg-indigo-600 text-white hover:bg-indigo-500",
+        outline: "border border-slate-700 bg-transparent hover:bg-slate-800 text-slate-100",
+        ghost: "bg-transparent hover:bg-slate-800 text-slate-300"
+      };
+      const sizes = { default: "h-10 px-4 py-2", sm: "h-9 rounded-md px-3", icon: "h-10 w-10 p-0" };
+      return <button ref={ref} className={cn("inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none", variants[variant], sizes[size], className)} {...props} />;
+    });
+    const Card = ({ className, children }) => <div className={cn("rounded-xl border border-slate-800 bg-slate-900/50 text-slate-100 shadow", className)}>{children}</div>;
+    const CardContent = ({ className, children }) => <div className={cn("p-6", className)}>{children}</div>;
+    const Label = ({ className, children }) => <label className={cn("text-sm font-medium leading-none text-slate-300", className)}>{children}</label>;
+    const Textarea = ({ className, ...props }) => <textarea className={cn("flex w-full rounded-md border border-slate-800 bg-transparent px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500", className)} {...props} />;
+    const Input = React.forwardRef(({ className, ...props }, ref) => <input ref={ref} className={cn("flex h-10 w-full rounded-md border border-slate-800 bg-transparent px-3 py-2 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500", className)} {...props} />);
+    const Badge = ({ className, children }) => <div className={cn("inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors", className)}>{children}</div>;
+
+    // Exclusive-Open Dropdown Coordinator
+    const DropdownContext = createContext({ activeId: null, setActiveId: () => {} });
+    const PopoverContext = createContext();
+
+    const Popover = ({ id, open, onOpenChange, children }) => (
+      <PopoverContext.Provider value={{ open, onOpenChange }}>
+        <div className="relative inline-block text-left w-full">{children}</div>
+      </PopoverContext.Provider>
+    );
+    const PopoverTrigger = ({ children }) => {
+      const { open, onOpenChange } = useContext(PopoverContext);
+      return cloneElement(children, { onClick: () => onOpenChange(!open) });
+    };
+    const PopoverContent = ({ className, children }) => {
+      const { open, onOpenChange } = useContext(PopoverContext);
+      const ref = useRef(null);
+
+      useEffect(() => {
+        if (!open) return;
+        const handleClickOutside = (e) => {
+          if (ref.current && !ref.current.contains(e.target)) {
+            onOpenChange(false);
+          }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+      }, [open, onOpenChange]);
+
+      if (!open) return null;
+      return (
+        <div ref={ref} className={cn("absolute z-50 mt-2 rounded-md shadow-md", className)}>
+          {children}
+        </div>
+      );
+    };
+
+    // PARTICLE BACKGROUND COMPONENT
+    const COLORS = [
+      { main: "#8A9A5B", glow: "rgba(138, 154, 91, 0.3)" },
+      { main: "#52796F", glow: "rgba(82, 121, 111, 0.3)" },
+      { main: "#3A7CA5", glow: "rgba(58, 124, 165, 0.3)" },
+      { main: "#4A4E69", glow: "rgba(74, 78, 105, 0.3)" },
+    ];
+    const PHASE_DURATION = 4000;
+    const PAUSE_DURATION = 3000;
+
+    function ParticleBackground() {
+      const canvasRef = useRef(null);
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        let animationFrame;
+        let particles = [];
+        let phase = 0;
+        let phaseStart = Date.now();
+        let isPaused = false;
+        let pauseStart = 0;
+
+        const resize = () => {
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          initParticles();
+        };
+
+        const initParticles = () => {
+          const count = Math.min(120, Math.floor((canvas.width * canvas.height) / 12000));
+          particles = [];
+          for (let i = 0; i < count; i++) {
+            const colorIndex = i % COLORS.length;
+            const color = COLORS[colorIndex];
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height;
+            particles.push({
+              x, y,
+              vx: (Math.random() - 0.5) * 0.5,
+              vy: (Math.random() - 0.5) * 0.5,
+              radius: 2 + Math.random() * 4,
+              color: color.main,
+              baseX: x, baseY: y,
+              phase: Math.random() * Math.PI * 2,
+              speed: 0.5 + Math.random() * 0.5,
+            });
+          }
+        };
+
+        const getTargetPosition = (particle, currentPhase) => {
+          const t = (Date.now() - phaseStart) / PHASE_DURATION;
+          const progress = Math.min(1, t);
+          switch (currentPhase) {
+            case 0:
+              return {
+                x: particle.baseX + Math.sin(particle.phase + Date.now() * 0.001) * 50,
+                y: particle.baseY + Math.cos(particle.phase + Date.now() * 0.001) * 50,
+              };
+            case 1:
+              const angle = particle.phase + progress * Math.PI * 4;
+              const radius = 100 + Math.random() * 200;
+              return {
+                x: (canvas.width / 2) + Math.cos(angle) * radius * (1 - progress * 0.5),
+                y: (canvas.height / 2) + Math.sin(angle) * radius * (1 - progress * 0.5),
+              };
+            case 2:
+              const colorIndex = COLORS.findIndex((c) => c.main === particle.color);
+              const clusterX = (colorIndex + 0.5) * (canvas.width / COLORS.length);
+              const clusterY = canvas.height / 2 + Math.sin(particle.phase) * 30;
+              return {
+                x: clusterX + (particle.baseX - clusterX) * (1 - progress),
+                y: clusterY + (particle.baseY - clusterY) * (1 - progress),
+              };
+            case 3:
+              const colorIdx = COLORS.findIndex((c) => c.main === particle.color);
+              return {
+                x: (colorIdx + 0.5) * (canvas.width / COLORS.length),
+                y: canvas.height / 2 + Math.sin(particle.phase) * 30
+              };
+            default: return { x: particle.x, y: particle.y };
+          }
+        };
+
+        const animate = () => {
+          const now = Date.now();
+          const elapsed = now - phaseStart;
+
+          if (isPaused) {
+            if (now - pauseStart >= PAUSE_DURATION) {
+              isPaused = false;
+              phase = 0;
+              phaseStart = now;
+              particles.forEach((p) => {
+                p.baseX = p.x;
+                p.baseY = p.y;
+                p.phase = Math.random() * Math.PI * 2;
+              });
+            }
+          } else if (elapsed >= PHASE_DURATION) {
+            if (phase === 3) {
+              isPaused = true;
+              pauseStart = now;
+            } else {
+              phase = (phase + 1) % 4;
+              phaseStart = now;
+            }
+          }
+
+          ctx.fillStyle = "#090D16";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          particles.forEach((particle) => {
+            const target = getTargetPosition(particle, phase);
+            const lerpSpeed = isPaused ? 0.02 : 0.05;
+            particle.x += (target.x - particle.x) * lerpSpeed;
+            particle.y += (target.y - particle.y) * lerpSpeed;
+
+            if (phase === 0) {
+              particle.x += particle.vx;
+              particle.y += particle.vy;
+              if (particle.x < 0 || particle.x > canvas.width) particle.vx *= -1;
+              if (particle.y < 0 || particle.y > canvas.height) particle.vy *= -1;
+            }
+
+            ctx.save();
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = COLORS.find((c) => c.main === particle.color)?.glow || "rgba(138, 154, 91, 0.3)";
+            ctx.beginPath();
+            ctx.arc(particle.x, particle.y, particle.radius, 0, Math.PI * 2);
+            ctx.fillStyle = particle.color;
+            ctx.fill();
+            ctx.restore();
+          });
+
+          animationFrame = requestAnimationFrame(animate);
+        };
+
+        resize();
+        window.addEventListener("resize", resize);
+        animationFrame = requestAnimationFrame(animate);
+
+        return () => {
+          cancelAnimationFrame(animationFrame);
+          window.removeEventListener("resize", resize);
+        };
+      }, []);
+
+      return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full opacity-60" />;
+    }
+
+    // MAIN APP COMPONENT & DATA
+    const languages = [
+      { code: "auto", name: "Auto-Detect", bcp47: "" },
+      { code: "af", name: "Afrikaans", bcp47: "af-ZA" },
+      { code: "sq", name: "Albanian", bcp47: "sq-AL" },
+      { code: "am", name: "Amharic", bcp47: "am-ET" },
+      { code: "ar", name: "Arabic", bcp47: "ar-SA" },
+      { code: "hy", name: "Armenian", bcp47: "hy-AM" },
+      { code: "as", name: "Assamese", bcp47: "as-IN" },
+      { code: "ay", name: "Aymara", bcp47: "ay-BO" },
+      { code: "az", name: "Azerbaijani", bcp47: "az-AZ" },
+      { code: "bm", name: "Bambara", bcp47: "bm-ML" },
+      { code: "eu", name: "Basque", bcp47: "eu-ES" },
+      { code: "be", name: "Belarusian", bcp47: "be-BY" },
+      { code: "bn", name: "Bengali", bcp47: "bn-IN" },
+      { code: "bho", name: "Bhojpuri", bcp47: "bho-IN" },
+      { code: "bs", name: "Bosnian", bcp47: "bs-BA" },
+      { code: "bg", name: "Bulgarian", bcp47: "bg-BG" },
+      { code: "ca", name: "Catalan", bcp47: "ca-ES" },
+      { code: "ceb", name: "Cebuano", bcp47: "ceb-PH" },
+      { code: "ny", name: "Chichewa", bcp47: "ny-MW" },
+      { code: "zh-CN", name: "Chinese (Simplified)", bcp47: "zh-CN" },
+      { code: "zh-TW", name: "Chinese (Traditional)", bcp47: "zh-TW" },
+      { code: "co", name: "Corsican", bcp47: "co-FR" },
+      { code: "hr", name: "Croatian", bcp47: "hr-HR" },
+      { code: "cs", name: "Czech", bcp47: "cs-CZ" },
+      { code: "da", name: "Danish", bcp47: "da-DK" },
+      { code: "dv", name: "Dhivehi", bcp47: "dv-MV" },
+      { code: "doi", name: "Dogri", bcp47: "doi-IN" },
+      { code: "nl", name: "Dutch", bcp47: "nl-NL" },
+      { code: "en", name: "English", bcp47: "en-US" },
+      { code: "eo", name: "Esperanto", bcp47: "eo-EO" },
+      { code: "et", name: "Estonian", bcp47: "et-EE" },
+      { code: "ee", name: "Ewe", bcp47: "ee-GH" },
+      { code: "fil", name: "Filipino", bcp47: "fil-PH" },
+      { code: "fi", name: "Finnish", bcp47: "fi-FI" },
+      { code: "fr", name: "French", bcp47: "fr-FR" },
+      { code: "fy", name: "Frisian", bcp47: "fy-NL" },
+      { code: "gl", name: "Galician", bcp47: "gl-ES" },
+      { code: "ka", name: "Georgian", bcp47: "ka-GE" },
+      { code: "de", name: "German", bcp47: "de-DE" },
+      { code: "el", name: "Greek", bcp47: "el-GR" },
+      { code: "gn", name: "Guarani", bcp47: "gn-PY" },
+      { code: "gu", name: "Gujarati", bcp47: "gu-IN" },
+      { code: "ht", name: "Haitian Creole", bcp47: "ht-HT" },
+      { code: "ha", name: "Hausa", bcp47: "ha-NG" },
+      { code: "haw", name: "Hawaiian", bcp47: "haw-US" },
+      { code: "he", name: "Hebrew", bcp47: "he-IL" },
+      { code: "hi", name: "Hindi", bcp47: "hi-IN" },
+      { code: "hmn", name: "Hmong", bcp47: "hmn-CN" },
+      { code: "hu", name: "Hungarian", bcp47: "hu-HU" },
+      { code: "is", name: "Icelandic", bcp47: "is-IS" },
+      { code: "ig", name: "Igbo", bcp47: "ig-NG" },
+      { code: "ilo", name: "Ilocano", bcp47: "ilo-PH" },
+      { code: "id", name: "Indonesian", bcp47: "id-ID" },
+      { code: "ga", name: "Irish", bcp47: "ga-IE" },
+      { code: "it", name: "Italian", bcp47: "it-IT" },
+      { code: "ja", name: "Japanese", bcp47: "ja-JP" },
+      { code: "jv", name: "Javanese", bcp47: "jv-ID" },
+      { code: "kn", name: "Kannada", bcp47: "kn-IN" },
+      { code: "kk", name: "Kazakh", bcp47: "kk-KZ" },
+      { code: "km", name: "Khmer", bcp47: "km-KH" },
+      { code: "rw", name: "Kinyarwanda", bcp47: "rw-RW" },
+      { code: "gom", name: "Konkani", bcp47: "gom-IN" },
+      { code: "ko", name: "Korean", bcp47: "ko-KR" },
+      { code: "kri", name: "Krio", bcp47: "kri-SL" },
+      { code: "ku", name: "Kurdish (Kurmanji)", bcp47: "ku-TR" },
+      { code: "ckb", name: "Kurdish (Sorani)", bcp47: "ckb-IQ" },
+      { code: "ky", name: "Kyrgyz", bcp47: "ky-KG" },
+      { code: "lo", name: "Lao", bcp47: "lo-LA" },
+      { code: "la", name: "Latin", bcp47: "la-VA" },
+      { code: "lv", name: "Latvian", bcp47: "lv-LV" },
+      { code: "ln", name: "Lingala", bcp47: "ln-CD" },
+      { code: "lt", name: "Lithuanian", bcp47: "lt-LT" },
+      { code: "lg", name: "Luganda", bcp47: "lg-UG" },
+      { code: "lb", name: "Luxembourgish", bcp47: "lb-LU" },
+      { code: "mk", name: "Macedonian", bcp47: "mk-MK" },
+      { code: "mai", name: "Maithili", bcp47: "mai-IN" },
+      { code: "mg", name: "Malagasy", bcp47: "mg-MG" },
+      { code: "ms", name: "Malay", bcp47: "ms-MY" },
+      { code: "ml", name: "Malayalam", bcp47: "ml-IN" },
+      { code: "mt", name: "Maltese", bcp47: "mt-MT" },
+      { code: "mi", name: "Maori", bcp47: "mi-NZ" },
+      { code: "mr", name: "Marathi", bcp47: "mr-IN" },
+      { code: "mni-Mtei", name: "Meiteilon (Manipuri)", bcp47: "mni-IN" },
+      { code: "lus", name: "Mizo", bcp47: "lus-IN" },
+      { code: "mn", name: "Mongolian", bcp47: "mn-MN" },
+      { code: "my", name: "Myanmar (Burmese)", bcp47: "my-MM" },
+      { code: "ne", name: "Nepali", bcp47: "ne-NP" },
+      { code: "no", name: "Norwegian", bcp47: "no-NO" },
+      { code: "or", name: "Odia (Oriya)", bcp47: "or-IN" },
+      { code: "om", name: "Oromo", bcp47: "om-ET" },
+      { code: "ps", name: "Pashto", bcp47: "ps-AF" },
+      { code: "fa", name: "Persian", bcp47: "fa-IR" },
+      { code: "pl", name: "Polish", bcp47: "pl-PL" },
+      { code: "pt", name: "Portuguese", bcp47: "pt-PT" },
+      { code: "pa", name: "Punjabi", bcp47: "pa-IN" },
+      { code: "qu", name: "Quechua", bcp47: "qu-PE" },
+      { code: "ro", name: "Romanian", bcp47: "ro-RO" },
+      { code: "ru", name: "Russian", bcp47: "ru-RU" },
+      { code: "sm", name: "Samoan", bcp47: "sm-WS" },
+      { code: "sa", name: "Sanskrit", bcp47: "sa-IN" },
+      { code: "gd", name: "Scots Gaelic", bcp47: "gd-GB" },
+      { code: "nso", name: "Sepedi", bcp47: "nso-ZA" },
+      { code: "sr", name: "Serbian", bcp47: "sr-RS" },
+      { code: "st", name: "Sesotho", bcp47: "st-LS" },
+      { code: "sn", name: "Shona", bcp47: "sn-ZW" },
+      { code: "sd", name: "Sindhi", bcp47: "sd-PK" },
+      { code: "si", name: "Sinhala", bcp47: "si-LK" },
+      { code: "sk", name: "Slovak", bcp47: "sk-SK" },
+      { code: "sl", name: "Slovenian", bcp47: "sl-SI" },
+      { code: "so", name: "Somali", bcp47: "so-SO" },
+      { code: "es", name: "Spanish", bcp47: "es-ES" },
+      { code: "su", name: "Sundanese", bcp47: "su-ID" },
+      { code: "sw", name: "Swahili", bcp47: "sw-KE" },
+      { code: "sv", name: "Swedish", bcp47: "sv-SE" },
+      { code: "tg", name: "Tajik", bcp47: "tg-TJ" },
+      { code: "ta", name: "Tamil", bcp47: "ta-IN" },
+      { code: "tt", name: "Tatar", bcp47: "tt-RU" },
+      { code: "te", name: "Telugu", bcp47: "te-IN" },
+      { code: "th", name: "Thai", bcp47: "th-TH" },
+      { code: "ti", name: "Tigrinya", bcp47: "ti-ET" },
+      { code: "ts", name: "Tsonga", bcp47: "ts-ZA" },
+      { code: "tr", name: "Turkish", bcp47: "tr-TR" },
+      { code: "tk", name: "Turkmen", bcp47: "tk-TM" },
+      { code: "ak", name: "Twi", bcp47: "ak-GH" },
+      { code: "uk", name: "Ukrainian", bcp47: "uk-UA" },
+      { code: "ur", name: "Urdu", bcp47: "ur-PK" },
+      { code: "ug", name: "Uyghur", bcp47: "ug-CN" },
+      { code: "uz", name: "Uzbek", bcp47: "uz-UZ" },
+      { code: "vi", name: "Vietnamese", bcp47: "vi-VN" },
+      { code: "cy", name: "Welsh", bcp47: "cy-GB" },
+      { code: "xh", name: "Xhosa", bcp47: "xh-ZA" },
+      { code: "yi", name: "Yiddish", bcp47: "yi-US" },
+      { code: "yo", name: "Yoruba", bcp47: "yo-NG" },
+      { code: "zu", name: "Zulu", bcp47: "zu-ZA" },
+    ];
+
+    const languageShortcuts = [
+      { code: "EN", label: "English", value: "en" },
+      { code: "ES", label: "Spanish", value: "es" },
+      { code: "FR", label: "French", value: "fr" },
+      { code: "YO", label: "Yoruba", value: "yo" },
+      { code: "IG", label: "Igbo", value: "ig" },
+      { code: "HA", label: "Hausa", value: "ha" },
+    ];
+
+    const sampleTexts = {
+      business:
+        "Welcome! We are pleased to announce our new partnership with leading technology firms across the continent. This collaboration will bring cutting-edge solutions to emerging markets and create new opportunities for innovation and growth.",
+      technical:
+        "Our neural translation engine leverages deep learning architectures with transformer-based models, achieving state-of-the-art performance across 130+ language pairs with sub-50ms latency and 99.9% uptime.",
+      local:
+        "Ẹ káàbọ̀! A kọ́kọ́ ṣe àgbéyẹ̀wò àwọn ọ̀nà tuntun láti mú kí ìtumọ̀ èdè wa yára bí iná. Èrò wa ni láti mú kí gbogbo èdè ní àyè kó dára nínú ẹ̀rọ wa.",
+    };
+
+    function LanguageSelect({ id, value, onChange, includeAuto = false, voiceSupportedSet = null }) {
+      const { activeId, setActiveId } = useContext(DropdownContext);
+      const open = activeId === id;
+      const setOpen = (next) => setActiveId(next ? id : null);
+      const [search, setSearch] = useState("");
+
+      const filteredLanguages = languages.filter((lang) => {
+        if (!includeAuto && lang.code === "auto") return false;
+        if (!search) return true;
+        return (
+          lang.name.toLowerCase().includes(search.toLowerCase()) ||
+          lang.code.toLowerCase().includes(search.toLowerCase())
+        );
+      });
+      const selectedLang = languages.find((l) => l.code === value);
+
+      return (
+        <Popover id={id} open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              role="combobox"
+              className="w-64 justify-between border-slate-700/50 bg-slate-900 text-white hover:bg-slate-800 hover:text-white"
+            >
+              {selectedLang?.name || "Select language"}
+              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-64 border-slate-700/50 bg-slate-900 p-0 border rounded-md">
+            <div className="flex items-center border-b border-slate-700/50 px-3">
+              <Search className="mr-2 h-4 w-4 shrink-0 text-slate-400" />
+              <Input
+                placeholder="Search languages..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="border-0 bg-transparent text-white placeholder:text-slate-500 focus-visible:ring-0"
+              />
+            </div>
+            <div className="max-h-64 overflow-y-auto p-1">
+              {filteredLanguages.length === 0 ? (
+                <div className="py-6 text-center text-sm text-slate-500">No language found</div>
+              ) : (
+                filteredLanguages.map((lang) => (
+                  <button
+                    key={lang.code}
+                    onClick={() => {
+                      onChange(lang.code);
+                      setOpen(false);
+                      setSearch("");
+                    }}
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-md px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white",
+                      value === lang.code && "bg-indigo-500/20 text-indigo-300"
+                    )}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      {lang.name}
+                      {voiceSupportedSet && !voiceSupportedSet.has(lang.code) && (
+                        <span className="text-[10px] text-slate-500">(no voice)</span>
+                      )}
+                    </span>
+                    {value === lang.code && <CheckIcon className="h-4 w-4 text-indigo-400" />}
+                  </button>
+                ))
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
+      );
+    }
+
+    function AudioVisualizer({ active }) {
+      return (
+        <div className="flex items-center gap-0.5">
+          {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+            <div key={i} className={cn("w-0.5 rounded-full transition-all", active ? "bg-cyan-400 animate-pulse" : "bg-slate-700")}
+                 style={{ height: active ? `${8 + Math.random() * 16}px` : "4px", animationDelay: `${i * 0.1}s`, animationDuration: "0.8s" }} />
+          ))}
+        </div>
+      );
+    }
+
+    function WelcomeSplash({ open, onClose }) {
+      const [isExiting, setIsExiting] = useState(false);
+      const [logoError, setLogoError] = useState(false);
+
+      if (!open && !isExiting) return null;
+
+      const handleEnter = () => {
+        setIsExiting(true);
+        setTimeout(() => { setIsExiting(false); onClose(); }, 700);
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-[#090D16] p-8">
+          <ParticleBackground />
+          <div className="relative grid w-full max-w-6xl grid-cols-1 items-center gap-12 md:grid-cols-2">
+            <div className={cn("transition-all duration-700 ease-in-out", isExiting ? "-translate-x-full opacity-0" : "translate-x-0 opacity-100")}>
+              {!logoError ? (
+                <picture>
+                  <source srcSet="./logo.avif" type="image/avif" />
+                  <img src="./logo.jpg" alt="DOMINION Logo" onError={() => setLogoError(true)} className="mb-6 h-20 w-20 rounded-full border-2 border-purple-500/50 object-cover shadow-[0_0_25px_rgba(168,85,247,0.4)]" />
+                </picture>
+              ) : (
+                <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full border-2 border-purple-500/50 bg-gradient-to-br from-purple-600/20 to-indigo-600/20"><Languages className="h-10 w-10 text-purple-400" /></div>
+              )}
+              <div className="mb-4 flex items-center gap-3">
+                <h1 className="bg-gradient-to-r from-white via-purple-200 to-indigo-400 bg-clip-text text-4xl font-extrabold tracking-tight text-transparent md:text-5xl">DOMINION OmniTranslate</h1>
+                <Badge className="border-purple-500/50 bg-purple-500/10 text-purple-300">CodeAlpha AI Edition</Badge>
+              </div>
+              <p className="max-w-lg text-lg font-medium leading-relaxed text-slate-300">Enterprise-Grade Neural Translation Studio with Automated Engine Failover & Speech Input.</p>
+            </div>
+            
+            <div className={cn("transition-all duration-700 ease-in-out", isExiting ? "translate-x-full opacity-0" : "translate-x-0 opacity-100")}>
+              <div className="max-w-md w-full rounded-3xl border border-purple-500/20 bg-slate-900/70 p-8 backdrop-blur-xl">
+                <div className="space-y-4">
+                  {[
+                    { icon: Globe2, text: "130+ Global Languages" },
+                    { icon: Mic2, text: "Browser Voice Recognition" },
+                    { icon: AudioWaveform, text: "gTTS Audio Streaming" },
+                    { icon: Shield, text: "Zero-Downtime Failover" },
+                  ].map((feature, i) => (
+                    <div key={i} className="flex items-center gap-4 rounded-xl border border-purple-500/10 bg-slate-800/50 p-4 transition-all duration-300 hover:scale-[1.02] hover:border-purple-500/50">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/20"><feature.icon className="h-5 w-5 text-purple-400" /></div>
+                      <span className="text-sm font-medium text-slate-200">{feature.text}</span>
+                    </div>
+                  ))}
+                </div>
+                <Button onClick={handleEnter} className="group mt-8 w-full bg-purple-600 py-6 text-base font-semibold hover:bg-purple-500 hover:scale-[1.02]">
+                  Enter Studio <ArrowRight className="ml-2 h-5 w-5 transition-transform group-hover:translate-x-1" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [sourceLang, setSourceLang] = useState("auto");
+      const [targetLang, setTargetLang] = useState("es");
+      const [sourceText, setSourceText] = useState("");
+      const [outputText, setOutputText] = useState("");
+      const [isTranslating, setIsTranslating] = useState(false);
+      const [isCopied, setIsCopied] = useState(false);
+      const [isListening, setIsListening] = useState(false);
+      const [isListeningTTS, setIsListeningTTS] = useState(false);
+      const [translationError, setTranslationError] = useState(false);
+      const [activeShortcut, setActiveShortcut] = useState("es");
+      const [showWelcome, setShowWelcome] = useState(true);
+      const [activeDropdown, setActiveDropdown] = useState(null);
+      const [selectedAccent, setSelectedAccent] = useState("us");
+      const [ttsSupported, setTtsSupported] = useState(new Set());
+      const [voiceError, setVoiceError] = useState(null);
+      
+      const recognitionRef = useRef(null);
+      const manualStopRef = useRef(false);
+      const baseTextRef = useRef("");
+      const finalTranscriptRef = useRef("");
+
+      const maxChars = 5000;
+
+      useEffect(() => {
+        fetch('/api/v1/tts/supported-langs')
+          .then((r) => r.json())
+          .then((d) => setTtsSupported(new Set(d.langs)))
+          .catch(() => {});
+      }, []);
+      
+      const voiceAvailable = ttsSupported.size === 0 || ttsSupported.has(targetLang);
+
+      const getBCP47Code = (langCode) => {
+        const lang = languages.find((l) => l.code === langCode);
+        return lang?.bcp47 || "en-US";
+      };
+
+      const handleTranslate = async () => {
+        if (!sourceText.trim()) return;
+        setIsTranslating(true);
+        setOutputText("");
+        setTranslationError(false);
+
+        try {
+          const response = await fetch('/api/v1/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text: sourceText,
+              source_lang: sourceLang,
+              target_lang: targetLang
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Server returned ${response.status}`);
+          }
+
+          const data = await response.json();
+          if (data.status === 'success' && data.data?.translated_text) {
+            setOutputText(data.data.translated_text);
+          } else {
+            setTranslationError(true);
+          }
+        } catch (err) {
+          console.error("Translation API error:", err);
+          setTranslationError(true);
+        } finally {
+          setIsTranslating(false);
+        }
+      };
+
+      const handleCopy = async () => {
+        if (!outputText) return;
+        try {
+          await navigator.clipboard.writeText(outputText);
+          setIsCopied(true);
+          setTimeout(() => setIsCopied(false), 2000);
+        } catch {
+          toast.error("Failed to copy text");
+        }
+      };
+      
+      const handleClear = () => {
+        setSourceText("");
+        setOutputText("");
+        setTranslationError(false);
+        baseTextRef.current = "";
+        finalTranscriptRef.current = "";
+      };
+
+      const handleShortcutClick = (value) => {
+        setTargetLang(value);
+        setActiveShortcut(value);
+      };
+      
+      const handleListen = async () => {
+        if (!outputText) return;
+        setIsListeningTTS(true);
+
+        try {
+          const response = await fetch('/api/v1/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: outputText, lang: targetLang, accent: selectedAccent })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.detail || "TTS request failed");
+          }
+
+          if (data.status === 'success' && data.audio_base64) {
+            const audio = new Audio(`data:audio/mp3;base64,${data.audio_base64}`);
+            audio.onended = () => setIsListeningTTS(false);
+            audio.onerror = () => setIsListeningTTS(false);
+            await audio.play();
+          } else {
+            setIsListeningTTS(false);
+          }
+        } catch (err) {
+          console.error("TTS playback error:", err);
+          toast.error(err.message);
+          setIsListeningTTS(false);
+        }
+      };
+
+      const startRecognition = () => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognitionRef.current = recognition;
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = getBCP47Code(sourceLang);
+
+        recognition.onresult = (event) => {
+          let interimTranscript = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalTranscriptRef.current += transcript + " ";
+            } else {
+              interimTranscript += transcript;
+            }
+          }
+          const combined = (baseTextRef.current + finalTranscriptRef.current + interimTranscript).slice(0, maxChars);
+          setSourceText(combined);
+        };
+
+        recognition.onerror = (event) => {
+          const messages = {
+            "audio-capture": "No microphone found - check your device.",
+            "not-allowed": "Microphone access blocked - allow mic permissions and try again.",
+            "service-not-allowed": "Speech service blocked by the browser.",
+            "network": "Network error during voice recognition.",
+            "language-not-supported": "Voice input isn't supported for this language in your browser.",
+          };
+          const fatal = ["not-allowed", "audio-capture", "language-not-supported", "service-not-allowed"];
+          if (messages[event.error]) {
+            setVoiceError(messages[event.error]);
+            setTimeout(() => setVoiceError(null), 4000);
+          }
+          if (fatal.includes(event.error)) {
+            manualStopRef.current = true;
+          }
+        };
+
+        recognition.onend = () => {
+          if (!manualStopRef.current) {
+            try {
+              recognition.start();
+              return;
+            } catch {
+              // Ignore restart error and transition state
+            }
+          }
+          setIsListening(false);
+        };
+
+        recognition.start();
+        setIsListening(true);
+      };
+
+      const handleVoiceInput = () => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+          setVoiceError("Voice input isn't supported in this browser.");
+          setTimeout(() => setVoiceError(null), 4000);
+          return;
+        }
+        if (isListening) {
+          manualStopRef.current = true;
+          recognitionRef.current?.stop();
+          setIsListening(false);
+          return;
+        }
+        manualStopRef.current = false;
+        baseTextRef.current = sourceText ? sourceText + " " : "";
+        finalTranscriptRef.current = "";
+        startRecognition();
+      };
+
+      useEffect(() => {
+        return () => {
+          manualStopRef.current = true;
+          recognitionRef.current?.stop();
+        };
+      }, []);
+
+      return (
+        <DropdownContext.Provider value={{ activeId: activeDropdown, setActiveId: setActiveDropdown }}>
+          <div className="min-h-screen bg-[#090D16] text-slate-200">
+            <div className="relative mx-auto max-w-7xl px-6 py-8">
+              <header className="mb-8 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="h-12 w-12 overflow-hidden rounded-xl border border-slate-700/50 bg-slate-800/50 shadow-md">
+                    <picture>
+                      <source srcSet="./logo.avif" type="image/avif" />
+                      <img
+                        src="./logo.jpg"
+                        alt="DOMINION Logo"
+                        className="h-full w-full object-cover"
+                        onError={(e) => { e.target.style.display = 'none'; }}
+                      />
+                    </picture>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <h1 className="text-2xl font-bold tracking-tight text-white">DOMINION</h1>
+                    <span className="text-sm text-slate-500">OmniTranslate</span>
+                    <Badge className="border-indigo-500/30 bg-indigo-500/10 text-indigo-300">CodeAlpha Edition</Badge>
+                  </div>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setShowWelcome(true)}><HelpCircle className="h-5 w-5" /></Button>
+              </header>
+
+              <Card className="mb-8 border-slate-800/50 bg-slate-900/50 backdrop-blur-sm">
+                <CardContent className="flex items-center justify-between p-4">
+                  <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-emerald-400" /><span className="text-sm text-slate-400">Engine: <span className="text-emerald-400">Active</span></span></div>
+                    <div className="flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-amber-400" /><span className="text-sm text-slate-400">Failover: <span className="text-amber-400">Standby</span></span></div>
+                    <div className="flex items-center gap-2"><Zap className="h-4 w-4 text-cyan-400" /><span className="text-sm text-slate-400">Latency: <span className="text-cyan-400">42ms</span></span></div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Globe className="h-4 w-4 text-slate-500" />
+                    {languageShortcuts.map((lang) => (
+                      <button key={lang.code} onClick={() => handleShortcutClick(lang.value)} className={cn("rounded-md border px-2 py-1 text-xs font-medium transition-all", activeShortcut === lang.value ? "border-indigo-400/50 bg-indigo-500/20 text-indigo-300" : "border-slate-700/50 bg-slate-800/50 text-slate-400")}>
+                        {lang.code}
+                      </button>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <Card className="border-slate-800/50 bg-slate-900/50">
+                  <CardContent className="space-y-4 p-6">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label>Source Language</Label>
+                        <LanguageSelect id="source" value={sourceLang} onChange={setSourceLang} includeAuto />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="sm" onClick={handleVoiceInput} className={isListening ? "animate-pulse text-red-400" : ""}>
+                          {isListening ? <MicOff className="mr-2 h-4 w-4" /> : <Mic className="mr-2 h-4 w-4" />}
+                          {isListening ? "Listening..." : "Speak"}
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={handleClear}><Trash2 className="mr-2 h-4 w-4" />Clear</Button>
+                      </div>
+                    </div>
+                    {voiceError && (
+                      <p className="text-xs text-red-400">{voiceError}</p>
+                    )}
+                    <Textarea value={sourceText} onChange={(e) => setSourceText(e.target.value.slice(0, maxChars))} placeholder="Enter text to translate..." className="min-h-[280px]" />
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={() => setSourceText(sampleTexts.business)} className="rounded-full border border-slate-700/50 bg-slate-800/50 px-3 py-1 text-xs text-slate-400 hover:text-white">Business</button>
+                        <button onClick={() => setSourceText(sampleTexts.technical)} className="rounded-full border border-slate-700/50 bg-slate-800/50 px-3 py-1 text-xs text-slate-400 hover:text-white">Technical</button>
+                        <button onClick={() => setSourceText(sampleTexts.local)} className="rounded-full border border-slate-700/50 bg-slate-800/50 px-3 py-1 text-xs text-slate-400 hover:text-white">Local Greeting</button>
+                      </div>
+                      <span className="text-xs text-slate-500">{sourceText.length} / {maxChars}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-slate-800/50 bg-slate-900/50">
+                  <CardContent className="space-y-4 p-6">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label>Target Language</Label>
+                        <LanguageSelect 
+                          id="target" 
+                          value={targetLang} 
+                          onChange={setTargetLang} 
+                          voiceSupportedSet={ttsSupported.size > 0 ? ttsSupported : null}
+                        />
+                        {targetLang === 'en' && (
+                          <div className="mt-2 flex items-center gap-1.5">
+                            <span className="text-[11px] text-slate-400 font-medium mr-1">Accent:</span>
+                            {[
+                              { code: "us", label: "US" },
+                              { code: "co.uk", label: "UK" },
+                              { code: "com.au", label: "AU" },
+                              { code: "co.in", label: "India" },
+                              { code: "com.ng", label: "Nigeria" },
+                              { code: "ca", label: "Canada" },
+                            ].map((acc) => (
+                              <button
+                                key={acc.code}
+                                onClick={() => setSelectedAccent(acc.code)}
+                                className={cn(
+                                  "rounded px-2 py-0.5 text-[10px] font-semibold transition-all border",
+                                  selectedAccent === acc.code 
+                                    ? "border-indigo-500 bg-indigo-500/20 text-indigo-300 shadow-sm" 
+                                    : "border-slate-800 bg-slate-800/40 text-slate-400 hover:text-slate-200"
+                                )}
+                              >
+                                {acc.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="sm" onClick={handleCopy} disabled={!outputText}>
+                          {isCopied ? <Check className="mr-2 h-4 w-4 text-emerald-400" /> : <Copy className="mr-2 h-4 w-4" />}
+                          {isCopied ? "Copied" : "Copy"}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleListen}
+                          disabled={!outputText || !voiceAvailable}
+                          title={!voiceAvailable ? "No voice available for this language yet" : ""}>
+                          <Volume2 className="mr-2 h-4 w-4" />
+                          {isListeningTTS ? "Playing..." : voiceAvailable ? "Listen" : "No voice"}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="relative min-h-[280px] rounded-lg border border-slate-700/50 bg-slate-800/30 p-4">
+                      {isTranslating ? (
+                        <div className="space-y-3">{[0, 1, 2].map((i) => <div key={i} className="h-4 animate-pulse rounded bg-slate-700/50" style={{ width: `${80 - i * 10}%` }} />)}</div>
+                      ) : translationError ? (
+                        <div className="flex h-full flex-col items-center justify-center"><AlertTriangle className="mb-3 h-8 w-8 text-red-400" /><p className="text-sm text-red-400">Engine unavailable.</p></div>
+                      ) : outputText ? (
+                        <p className="text-slate-200">{outputText}</p>
+                      ) : (
+                        <div className="flex h-full flex-col items-center justify-center"><Sparkles className="mb-3 h-8 w-8 text-slate-600" /><p className="text-sm text-slate-500">Output will appear here</p></div>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <AudioVisualizer active={isListeningTTS} />
+                      <span className="text-xs text-slate-500">{outputText ? `${outputText.length} characters` : "No output yet"}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="mt-8 flex justify-center">
+                <Button onClick={handleTranslate} disabled={!sourceText.trim() || isTranslating} className="bg-indigo-600 px-12 py-6 text-lg">
+                  {isTranslating ? <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Translating...</> : <><Languages className="mr-2 h-5 w-5" /> Translate Engine</>}
+                </Button>
+              </div>
+
+              <footer className="mt-12 border-t border-slate-800/50 pt-6 text-center text-sm text-slate-500">
+                Engineered with FastAPI, Python, React & gTTS | CodeAlpha AI Project
+              </footer>
+            </div>
+            <WelcomeSplash open={showWelcome} onClose={() => setShowWelcome(false)} />
+          </div>
+        </DropdownContext.Provider>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
