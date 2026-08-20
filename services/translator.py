@@ -46,6 +46,9 @@ def _translate_chunks(chunks: list[str], engine_type: str, src: str, target: str
 
         if engine_type == "google":
             result = GoogleTranslator(source=src, target=target).translate(chunk)
+            # Detect Google HTML/500 error strings to trigger failover
+            if result and ("500 (Server Error)" in result or "That's an error" in result or "Server Error" in result):
+                raise ValueError(f"Google Cloud IP block detected: {result[:50]}")
         elif engine_type == "mymemory":
             fallback_src = "en" if src == "auto" else src
             result = MyMemoryTranslator(source=fallback_src, target=target).translate(chunk)
@@ -60,23 +63,17 @@ def _translate_chunks(chunks: list[str], engine_type: str, src: str, target: str
 
 
 def translate_text(text: str, source_lang: str, target_lang: str) -> dict:
-    """
-    Translates text with automatic engine failover and smart payload chunking.
-    Primary Engine: GoogleTranslator
-    Failover Engine: MyMemoryTranslator
-    """
+    """Translates text with automatic failover and cloud IP error detection."""
     clean_text = text.strip()
     src = "auto" if source_lang.strip().lower() in ["auto", "auto-detect"] else source_lang.strip()
     target = target_lang.strip()
 
-    # Short-circuit if source and target languages are identical
     if src.lower() == target.lower():
         return {
             "translated_text": clean_text,
             "engine_used": "Direct Pass-through"
         }
 
-    # Break text into chunks under 400 characters
     chunks = _chunk_text(clean_text, max_chars=400)
 
     try:
