@@ -231,7 +231,7 @@ Successful response:
 
 Notes:
 
-- text is limited to 1000 characters.  
+- text is limited to 5000 characters.  
 - accent is optional and only meaningfully affects output when lang is "en"; for all other languages it is ignored by the synthesis engine.  
 - If the requested lang is not supported by the TTS engine, the API returns a 400 error with an explanatory message instead of a 500 error.
 

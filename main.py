@@ -37,7 +37,7 @@ class TranslationRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str = Field(
-        ..., max_length=1000, description="Text string for speech synthesis"
+        ..., max_length=5000, description="Text string for speech synthesis"
     )
     lang: str = Field(
         ...,
