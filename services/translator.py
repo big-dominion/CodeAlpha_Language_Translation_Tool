@@ -1,11 +1,8 @@
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 
 
-def _chunk_text(text: str, max_chars: int = 400) -> list[str]:
-    """
-    Splits long text into smaller chunks based on line breaks and spaces
-    to prevent API payload limits (e.g., MyMemory's 500-char limit) and Render IP blocks.
-    """
+def _chunk_text(text: str, max_chars: int = 500) -> list[str]:
+    """Splits long text into smaller chunks based on line breaks and spaces."""
     if len(text) <= max_chars:
         return [text]
 
@@ -63,7 +60,7 @@ def _translate_chunks(chunks: list[str], engine_type: str, src: str, target: str
 
 
 def translate_text(text: str, source_lang: str, target_lang: str) -> dict:
-    """Translates text with automatic failover and cloud IP error detection."""
+    """Translates text with automatic failover and engine-specific chunk limits."""
     clean_text = text.strip()
     src = "auto" if source_lang.strip().lower() in ["auto", "auto-detect"] else source_lang.strip()
     target = target_lang.strip()
@@ -74,17 +71,19 @@ def translate_text(text: str, source_lang: str, target_lang: str) -> dict:
             "engine_used": "Direct Pass-through"
         }
 
-    chunks = _chunk_text(clean_text, max_chars=400)
-
+    # Primary Try: Google Translate using fast 1,000-character chunks
     try:
-        translated = _translate_chunks(chunks, "google", src, target)
+        google_chunks = _chunk_text(clean_text, max_chars=1000)
+        translated = _translate_chunks(google_chunks, "google", src, target)
         return {
             "translated_text": translated,
             "engine_used": "Google Translate"
         }
     except Exception as primary_error:
+        # Failover Try: Re-chunk to 450 characters so MyMemory's 500-char API cap is never exceeded
         try:
-            translated = _translate_chunks(chunks, "mymemory", src, target)
+            mymemory_chunks = _chunk_text(clean_text, max_chars=450)
+            translated = _translate_chunks(mymemory_chunks, "mymemory", src, target)
             return {
                 "translated_text": translated,
                 "engine_used": "MyMemory (Failover)"
